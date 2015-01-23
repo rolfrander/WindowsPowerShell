@@ -1,10 +1,21 @@
-﻿function Set-CaPolicy($policy, $HTTP=$null, $DC=$null) {
+﻿
+$SCRIPT:extendedrightsmap = @{}
+Get-ADObject -SearchBase ([ADSI]"LDAP://RootDSE").ConfigurationNamingContext.ToString() `
+             -LDAPFilter "(&(objectclass=controlAccessRight)(rightsguid=*))"   `
+             -Properties displayName,rightsGuid |% {
+    $SCRIPT:extendedrightsmap[$_.displayName]=[System.GUID]$_.rightsGuid
+}
+
+$SCRIPT:namingContext = ([ADSI]"LDAP://RootDSE").defaultNamingContext
+$SCRIPT:configContext = ([ADSI]"LDAP://RootDSE").configurationNamingContext
+
+function Set-CaPolicy($policy, $HTTP=$null, $DC=$null) {
     if($HTTP = $null) {
         $HTTP=$env:COMPUTERNAME+"."+$env:USERDNSDOMAIN
     }
 
     if($DC = $null) {
-        $DC = ([ADSI]"LDAP://RootDSE").defaultNamingContext
+        $DC = $namingContext.toString()
     }
 
     $CRLurl = "1:$SystemRoot\system32\Certsrv\CertEnroll\%%3%%8.crl\n"
@@ -61,9 +72,6 @@ function Set-CaTemplateAcl($DC = $null, $Domain = $null) {
     .PARAMETER $Domain
      Domain where the group belongs
     #>
-    if($DC = $null) {
-        $DC = ([ADSI]"LDAP://RootDSE").defaultNamingContext
-    }
     if($Domain = $null) {
         $Domain=$env:USERDOMAIN
     }
@@ -87,13 +95,10 @@ function Set-CaTemplateAcl($DC = $null, $Domain = $null) {
 
     # https://technet.microsoft.com/en-us/library/cc771151.aspx
 
-    certutil -template |% { if($_ -match "TemplatePropCommonName = (.*)") { $Matches[1] } } |% { 
-      dsacls "CN=$_,CN=Certificate Templates,CN=Public Key Services,CN=Services,CN=Configuration,$DC" /G $Domain\$Group:$Rights
+    $templates = [ADSI]"LDAP://CN=Certificate Templates,CN=Public Key Services,CN=Services,$ConfigContext" 
+    $templates.psbase.children | select -expandproperty distinguishedName |% { 
+      dsacls $_ /G "${Domain}\${Group}:${Rights}"
     }
-}
-
-function Create-CertificateTemplate() {
-
 }
 
 function Create-Policy() {
@@ -137,9 +142,9 @@ function Set-Renewal($policy, $count, $units) {
 }
 
 function periodstring($element, $crlpolicy, $policyelement) {
-$units=$crlpolicy[$policyelement][0]
-$type=$crlpolicy[$policyelement][1]
-@"
+    $units=$crlpolicy[$policyelement][0]
+    $type=$crlpolicy[$policyelement][1]
+    @"
 ${element}Units=$units
 ${element}=$type
 
@@ -148,7 +153,7 @@ ${element}=$type
 
 function Create-PolicyIni($policy) {
 
-$ini=@"
+    $ini=@"
 [Version]
 Signature="$$Windows NT$$"
 [certsrv_server]
@@ -156,12 +161,12 @@ RenewalKeyLength=2048
 
 "@
 
-$ini += periodstring "RenewalValidityPeriod" $policy "renewal"
-$ini += periodstring "CRLPeriod"  $policy "period"
-$ini += periodstring "CRLOverlap" $policy "overlap"
-$ini += periodstring "CRLDelta"   $policy "delta"
+    $ini += periodstring "RenewalValidityPeriod" $policy "renewal"
+    $ini += periodstring "CRLPeriod"  $policy "period"
+    $ini += periodstring "CRLOverlap" $policy "overlap"
+    $ini += periodstring "CRLDelta"   $policy "delta"
 
-$ini+=@"
+    $ini+=@"
 LoadDefaultTemplates=0
 DiscreteSignatureAlgorithm=0
 [BasicConstrainsExtension]
@@ -169,5 +174,92 @@ Pathlength=0
 
 "@
 
-$ini
+    $ini
+}
+
+function Get-CertTemplate($name) {
+    $templates = [ADSI]"LDAP://CN=Certificate Templates,CN=Public Key Services,CN=Services,$ConfigContext" 
+    $templates.psbase.children |? { $_.displayName -eq $name }
+}
+
+function Set-AuthenticatedUsersCanEnroll($template) {
+    $identity = [System.Security.Principal.SecurityIdentifier]"S-1-5-11"
+    $enroll = New-Object System.DirectoryServices.ActiveDirectoryAccessRule($identity,"ExtendedRight", "Allow", $SCRIPT:extendedrightsmap["Enroll"])
+    #$read = New-Object System.DirectoryServices.ActiveDirectoryAccessRule($identity,"GenericRead", "Allow")
+    $template.psbase.ObjectSecurity.AddAccessRule($enroll)
+    #$template.psbase.ObjectSecurity.SetAccessRule($read)
+    $template.psbase.commitchanges()
+    $template
+}
+
+function Copy-CertTemplate($originalTemplateName, $newTemplateName, $attributes, [switch]$pend = $false) {
+
+    $templates = [ADSI]"LDAP://CN=Certificate Templates,CN=Public Key Services,CN=Services,$ConfigContext" 
+    $orgTempl = $templates.psbase.children |? { $_.displayName -eq $originalTemplateName }
+    if($orgTempl -eq $null) {
+        throw "Template not found: $originalTemplateName"
+    }
+
+    $displayName = $newTemplateName
+    $name = $newTemplateName.replace(" ","")
+
+    $newTempl = $templates.Create("pKICertificateTemplate", "CN=$name") 
+    $null = $newTempl.put("distinguishedName","CN=$name,CN=Certificate Templates,CN=Public Key Services,CN=Services,$ConfigContext") 
+    $null = $newTempl.put("displayName","$displayName")
+    $null = $newTempl.put("revision", "100")
+    $null = $NewTempl.put("msPKI-Template-Minor-Revision","0")
+    # $NewTempl.put("msPKI-Cert-Template-OID","1.3.6.1.4.1.311.21.8.7638725.13898300.1985460.3383425.7519116.119.16408497.1716 293")
+    # endring i forhold til utgangspunkt: denne malen kan endres
+    # CT_FLAG_IS_MODIFIED
+    $null = $newTempl.put("flags","131649")
+
+    $oid=$orgTempl.get("msPKI-Cert-Template-OID") -replace "\.[0-9]*\.[0-9]*$",(".{0}.{1}" -f (get-random),(get-random))
+    $null = $newTempl.put("msPKI-Cert-Template-OID", $oid)
+    try {
+        $null = $newTempl.SetInfo()
+    } catch {
+        throw $_
+    }
+
+    # https://msdn.microsoft.com/en-us/library/cc226546.aspx
+    # 2 = CT_FLAG_PEND_ALL_REQUESTS
+    if($pend) {
+        $null = $newTempl.put("msPKI-Enrollment-Flag","2")
+        $null = $newTempl.put("msPKI-RA-Signature", "0")
+    } else {
+        $null = $newTempl.put("msPKI-Enrollment-Flag","0")
+    }
+
+    $allflags=@("msPKI-Certificate-Name-Flag",
+                "msPKI-Private-Key-Flag",
+                "msPKI-Minimal-Key-Size",
+                "msPKI-Template-Minor-Revision",
+                "msPKI-Template-Schema-Version",
+                "pkiCriticalExtensions",
+                "pKIDefaultCSPs",
+                "pKIDefaultKeySpec",
+                "pKIExpirationPeriod",
+                "pKIExtendedKeyUsage",
+                "pKIKeyUsage",
+                "pkiMaxIssuingDepth",
+                "pKIOverlapPeriod")
+
+    $allflags |% { $null = $newTempl.put($_, $orgTempl.get($_)) }
+
+    # uklart hva dette betyr...
+    $null = $newTempl.put("msPKI-Private-Key-Flag","16842752")
+
+    # $NewTempl.put("pKIExtendedKeyUsage","1.3.6.1.5.5.7.3.1, 1.3.6.1.5.5.7.3.2")
+    if($attributes) {
+        $attributes.keys |% { $null = $newTempl.put($_, $attributes[$_]) }
+    }
+
+    $null = $newTempl.put("msPKI-Certificate-Application-Policy", $newTempl.get("pKIExtendedKeyUsage"))
+
+    $null = $newTempl.SetInfo()
+    $newTempl
+}
+
+function Add-UserToCertificateManagers($user) {
+    Get-ADGroup -Identity "Certificate Managers"
 }
