@@ -1,13 +1,89 @@
 ﻿
-$SCRIPT:extendedrightsmap = @{}
-Get-ADObject -SearchBase ([ADSI]"LDAP://RootDSE").ConfigurationNamingContext.ToString() `
-             -LDAPFilter "(&(objectclass=controlAccessRight)(rightsguid=*))"   `
-             -Properties displayName,rightsGuid |% {
-    $SCRIPT:extendedrightsmap[$_.displayName]=[System.GUID]$_.rightsGuid
-}
+#$SCRIPT:extendedrightsmap = @{}
+#Get-ADObject -SearchBase ([ADSI]"LDAP://RootDSE").ConfigurationNamingContext.ToString() `
+#             -LDAPFilter "(&(objectclass=controlAccessRight)(rightsguid=*))"   `
+#             -Properties displayName,rightsGuid |% {
+#    $SCRIPT:extendedrightsmap[$_.displayName]=[System.GUID]$_.rightsGuid
+#}
 
 $SCRIPT:namingContext = ([ADSI]"LDAP://RootDSE").defaultNamingContext
 $SCRIPT:configContext = ([ADSI]"LDAP://RootDSE").configurationNamingContext
+
+function Install-CA {
+    Install-WindowsFeature -Name ADCS-Cert-Authority
+    Install-WindowsFeature -Name RSAT-ADCS-Mgmt
+    Install-WindowsFeature -Name ADCS-Web-Enrollment
+}
+function Setup-RootCa($CN, $O, [switch]$enterprise = $false, $keyLength=2048, $validityYears = 8) {
+    if($enterprise) {
+        Install-AdcsCertificationAuthority `
+             -CACommonName "$CN" `
+             -CADistinguishedNameSuffix "C=NO,O=$O" `
+             -CAType EnterpriseRootCA `
+             -CryptoProviderName "RSA#Microsoft Software Key Storage Provider" `
+             -HashAlgorithmName sha256 `
+             -KeyLength $keyLength `
+             -ValidityPeriod Years -ValidityPeriodUnits $validityYears `
+             -OverwriteExistingKey -Force
+    } else {
+        Install-AdcsCertificationAuthority `
+             -CACommonName "$CN" `
+             -CADistinguishedNameSuffix "C=NO,O=$O" `
+             -CAType StandaloneRootCA `
+             -CryptoProviderName "RSA#Microsoft Software Key Storage Provider" `
+             -HashAlgorithmName sha256 `
+             -KeyLength $keyLength `
+             -ValidityPeriod Years -ValidityPeriodUnits $validityYears `
+             -OverwriteExistingKey -Force
+    }
+}
+
+function Setup-IssuingCa($CN, $O, [switch]$enterprise = $false) {
+    if($enterprise) {
+        Install-AdcsCertificationAuthority `
+            -CACommonName "$CN"   `
+            -CADistinguishedNameSuffix "C=NO,O=$O" `
+            -CAType StandaloneSubordinateCA `
+            -CryptoProviderName "RSA#Microsoft Software Key Storage Provider" `
+            -HashAlgorithmName sha256 `
+            -KeyLength 2048 `
+            -OutputCertRequest c:\certrequest.req `
+            -OverwriteExistingKey `
+            -Verbose -force
+    } else {
+        Install-AdcsCertificationAuthority `
+            -CACommonName "$CN"   `
+            -CADistinguishedNameSuffix "C=NO,O=$O" `
+            -CAType EnterpriseSubordinateCA `
+            -CryptoProviderName "RSA#Microsoft Software Key Storage Provider" `
+            -HashAlgorithmName sha256 `
+            -KeyLength 2048 `
+            -OutputCertRequest c:\certrequest.req `
+            -OverwriteExistingKey `
+            -Verbose -force
+    }
+    certutil -hashfile c:\certrequest.req
+}
+
+function Setup-WebEnrollment() {
+    Install-AdcsWebEnrollment -Force
+}
+
+function Uninstall-CA {
+    UnInstall-AdcsCertificationAuthority -Force
+    Uninstall-WindowsFeature -Name AD-Certificate
+    Uninstall-WindowsFeature -Name RSAT-ADCS-Mgmt
+}
+
+function Get-StatusCa {
+    Get-WindowsFeature -name ADCS-Cert-Authority
+    Get-WindowsFeature -Name AD-Certificate
+}
+
+function Manage-CA {
+    certsrv.msc
+}
+ 
 
 function Set-CaPolicy($policy, $HTTP=$null, $DC=$null) {
     if($HTTP = $null) {
@@ -57,7 +133,7 @@ function Restart-Adcs {
     net start certsvc
 }
 
-function Set-CaTemplateAcl($DC = $null, $Domain = $null) {
+function Set-CaTemplateAcl {
     <#
     .SYNOPSIS
      Changes access control settings for all certificate templates.
@@ -72,9 +148,7 @@ function Set-CaTemplateAcl($DC = $null, $Domain = $null) {
     .PARAMETER $Domain
      Domain where the group belongs
     #>
-    if($Domain = $null) {
-        $Domain=$env:USERDOMAIN
-    }
+    $Domain=$env:USERDOMAIN
 
     $Group="Certificate-Template-Administrators"
 
@@ -101,7 +175,7 @@ function Set-CaTemplateAcl($DC = $null, $Domain = $null) {
     }
 }
 
-function Create-Policy() {
+function New-Policy() {
     <#
     .SYNOPSIS
      Creates a policy-object
@@ -151,11 +225,11 @@ ${element}=$type
 "@
 }
 
-function Create-PolicyIni($policy) {
+function New-PolicyIni($policy) {
 
     $ini=@"
 [Version]
-Signature="$$Windows NT$$"
+Signature="`$Windows NT`$"
 [certsrv_server]
 RenewalKeyLength=2048
 
@@ -263,3 +337,8 @@ function Copy-CertTemplate($originalTemplateName, $newTemplateName, $attributes,
 function Add-UserToCertificateManagers($user) {
     Get-ADGroup -Identity "Certificate Managers"
 }
+
+Export-ModuleMember -Function Set-CaPolicy,Restart-Adcs,Set-CaTemplateAcl,New-Policy,`
+                              New-PolicyIni,Set-CrlDelta,Set-CrlOverlap,Set-CrlPeriod,`
+                              Set-Renewal,Install-CA,Setup-RootCA,Setup-IssuingCA,`
+                              Uninstall-CA,Get-StatusCa,Manage-CA,Setup-WebEnrollment
