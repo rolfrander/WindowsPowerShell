@@ -1,5 +1,10 @@
-﻿# or wherever modules are located...
-$env:PSModulePath += ";$env:USERPROFILE\Documents\WindowsPowerShell\Modules"
+﻿Set-DnsClientServerAddress -InterfaceAlias "Ethernet" -ServerAddresses 100.92.82.121
+Add-Computer -DomainName folkestad-naess.name -Credential folkestad-naess\ladmin -Restart
+
+ping domain
+
+# or wherever modules are located...
+$env:PSModulePath += ";c:\users\ladmin\Documents\WindowsPowerShell\Modules"
 
 # allow local scripts to be run unsigned
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process -Force
@@ -10,7 +15,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process -Force
 #####################################################
 
 # install AD powershell module
-Get-WindowsFeature -Name RSAT-ADDS-Tools
+Install-WindowsFeature -Name RSAT-AD-PowerShell
 
 # create AD-groups for role separation
 New-ADGroup "CA Administrators" Global
@@ -20,16 +25,21 @@ New-ADGroup "Certificate-Template-Administrators" Global
 
 #####################################################
 
-Import-Module AdcsUtils -Verbose
+#Remove-Module AdcsUtils
+Import-Module AdcsUtils
 
+# https://technet.microsoft.com/en-us/library/jj125373.aspx
 $policy = New-Policy
-New-PolicyIni $policy > C:\Windows\policy.ini
+New-PolicyIni $policy > C:\Windows\CAPolicy.inf
 
 Install-CA
-Setup-RootCa -CN "Issuing CA" -O "My company" -enterprise $true
+Setup-RootCa -CN "Enterprise Root CA" -O "Company" -enterprise $true
 
+Uninstall-AdcsCertificationAuthority -Force
 Set-CaTemplateAcl
-Set-CaPolicy -policy $policy -HTTP pki.folkestad-naess.name
+# dette er DNS-navnet hvor CRL blir publisert
+$hostname=$env:COMPUTERNAME+"."+$env:USERDNSDOMAIN
+Set-CaPolicy -policy $policy -HTTP $hostname
 
 Restart-Adcs
 

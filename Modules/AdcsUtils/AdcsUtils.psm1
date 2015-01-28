@@ -24,7 +24,8 @@ function Setup-RootCa($CN, $O, [switch]$enterprise = $false, $keyLength=2048, $v
              -HashAlgorithmName sha256 `
              -KeyLength $keyLength `
              -ValidityPeriod Years -ValidityPeriodUnits $validityYears `
-             -OverwriteExistingKey -Force
+             -AllowAdministratorInteraction `
+             -Verbose -force
     } else {
         Install-AdcsCertificationAuthority `
              -CACommonName "$CN" `
@@ -34,7 +35,8 @@ function Setup-RootCa($CN, $O, [switch]$enterprise = $false, $keyLength=2048, $v
              -HashAlgorithmName sha256 `
              -KeyLength $keyLength `
              -ValidityPeriod Years -ValidityPeriodUnits $validityYears `
-             -OverwriteExistingKey -Force
+             -AllowAdministratorInteraction `
+             -Verbose -force
     }
 }
 
@@ -71,8 +73,9 @@ function Setup-WebEnrollment() {
 
 function Uninstall-CA {
     UnInstall-AdcsCertificationAuthority -Force
-    Uninstall-WindowsFeature -Name AD-Certificate
+    Uninstall-WindowsFeature -Name ADCS-Web-Enrollment
     Uninstall-WindowsFeature -Name RSAT-ADCS-Mgmt
+    Uninstall-WindowsFeature -Name AD-Certificate
 }
 
 function Get-StatusCa {
