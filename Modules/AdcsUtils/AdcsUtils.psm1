@@ -271,6 +271,8 @@ function Set-AuthenticatedUsersCanEnroll($template) {
 
 function Copy-CertTemplate($originalTemplateName, $newTemplateName, $attributes, [switch]$pend = $false) {
 
+    # https://social.technet.microsoft.com/forums/windowsserver/en-US/347acc93-8352-4535-ab1a-23ebd49eea22/duplicate-certificate-template-edit-and-publish-it
+
     $templates = [ADSI]"LDAP://CN=Certificate Templates,CN=Public Key Services,CN=Services,$ConfigContext" 
     $orgTempl = $templates.psbase.children |? { $_.displayName -eq $originalTemplateName }
     if($orgTempl -eq $null) {
