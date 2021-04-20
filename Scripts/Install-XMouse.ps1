@@ -20,5 +20,8 @@ $systemParamInfo::SystemParametersInfo(0x1001, 0, [REF]$newVal, 2)
 
 # uklart hvilken av disse som virker, ser ut til at windows må restarte for effekt, restart av explorer er ikke nok
 # https://stackoverflow.com/questions/33185219/windows-10-activate-window-by-mouse-hover-delay
-Set-ItemProperty 'HKCU:\Control Panel\Desktop\' ActiveWndTrkTimeout 0
-Set-ItemProperty 'HKCU:\Control Panel\Desktop\' ActiveWndTrackTimeout 0
+Set-ItemProperty 'HKCU:\Control Panel\Desktop\' ActiveWndTrkTimeout 200
+Set-ItemProperty 'HKCU:\Control Panel\Desktop\' ActiveWndTrackTimeout 200
+
+# Get-ItemProperty 'HKCU:\Control Panel\Desktop\' ActiveWndTrkTimeout
+# Get-ItemProperty 'HKCU:\Control Panel\Desktop\' ActiveWndTrackTimeout
